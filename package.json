@@ -1,0 +1,59 @@
+{
+  "name": "ainative-strapi-mcp-server",
+  "version": "1.0.0",
+  "description": "AINative Strapi MCP Server - Natural language content publishing and management for Strapi CMS. Supports blog posts, tutorials, and events. Production-ready MCP integration for AI assistants.",
+  "main": "index.js",
+  "type": "commonjs",
+  "bin": {
+    "ainative-strapi-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Tests to be added\"",
+    "lint": "eslint *.js",
+    "lint:fix": "eslint *.js --fix"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "modelcontextprotocol",
+    "strapi",
+    "ainative",
+    "cms",
+    "content-management",
+    "blog",
+    "publishing",
+    "headless-cms",
+    "llm",
+    "ai",
+    "agent",
+    "ai-assistant"
+  ],
+  "author": {
+    "name": "AINative Studio",
+    "email": "support@ainative.studio",
+    "url": "https://ainative.studio"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AINative-Studio/ainative-strapi-mcp-server.git"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "axios": "^1.7.7"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
