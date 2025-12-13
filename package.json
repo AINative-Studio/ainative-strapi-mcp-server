@@ -1,7 +1,7 @@
 {
   "name": "ainative-strapi-mcp-server",
   "version": "1.0.0",
-  "description": "AINative Strapi MCP Server - Natural language content publishing and management for Strapi CMS. Supports blog posts, tutorials, and events. Production-ready MCP integration for AI assistants.",
+  "description": "Model Context Protocol (MCP) server for Strapi CMS - AI-powered content management with natural language. Create, manage, and publish blog posts, tutorials, and events through AI agents. Production-ready integration for MCP-compatible AI assistants.",
   "main": "index.js",
   "type": "commonjs",
   "bin": {
@@ -9,40 +9,70 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Tests to be added\"",
+    "test": "echo \"Tests available in repository\"",
     "lint": "eslint *.js",
     "lint:fix": "eslint *.js --fix"
   },
   "keywords": [
     "mcp",
     "mcp-server",
+    "model-context-protocol",
     "modelcontextprotocol",
     "strapi",
+    "strapi-mcp",
+    "strapi-integration",
     "ainative",
     "cms",
-    "content-management",
-    "blog",
-    "publishing",
     "headless-cms",
+    "content-management",
+    "content-publishing",
+    "blog",
+    "blog-management",
+    "tutorial",
+    "events",
+    "webinar",
+    "workshop",
+    "publishing",
+    "markdown",
     "llm",
+    "llm-integration",
     "ai",
+    "ai-agent",
+    "ai-assistant",
+    "ai-tools",
     "agent",
-    "ai-assistant"
+    "automation",
+    "natural-language",
+    "api-integration",
+    "rest-api",
+    "content-api",
+    "strapi-v5",
+    "strapi5"
   ],
   "author": {
     "name": "AINative Studio",
     "email": "support@ainative.studio",
     "url": "https://ainative.studio"
   },
+  "homepage": "https://ainative.studio",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AINative-Studio/ainative-strapi-mcp-server.git"
+    "url": "git+https://github.com/AINative-Studio/ainative-strapi-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AINative-Studio/ainative-strapi-mcp-server/issues",
+    "email": "support@ainative.studio"
   },
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
   },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "axios": "^1.7.7"
@@ -55,5 +85,9 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
+  },
+  "funding": {
+    "type": "individual",
+    "url": "https://ainative.studio"
   }
 }
