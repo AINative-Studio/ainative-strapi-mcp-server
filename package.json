@@ -1,6 +1,6 @@
 {
   "name": "ainative-strapi-mcp-server",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Model Context Protocol (MCP) server for Strapi CMS - AI-powered content management with natural language. Create, manage, and publish blog posts, tutorials, and events through AI agents. Production-ready integration for MCP-compatible AI assistants.",
   "main": "index.js",
   "type": "commonjs",

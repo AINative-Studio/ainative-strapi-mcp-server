@@ -12,15 +12,20 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 const axios = require('axios')
 
 /**
- * AINative Strapi MCP Server v1.0.0
+ * AINative Strapi MCP Server v1.1.0
  *
  * Natural language content publishing and management for Strapi CMS
  * Operations:
  * - Blog Post Management: create, list, get, update, publish (with advanced filtering)
- * - Tutorial Management: create, list, get, update, publish
- * - Event Management: create, list, get, update, publish
+ * - Tutorial Management: create, list, get, update, publish (with auto-slug generation)
+ * - Event Management: create, list, get, update, publish (with auto-slug generation)
  * - Author Management: list authors
  * - Category/Tag Management: list categories, list tags
+ *
+ * Features:
+ * - Automatic slug generation from titles for all content types
+ * - Backward compatible with explicit slug parameters
+ * - Auto-updates slugs when titles change (unless explicit slug provided)
  */
 
 class StrapiMCPServer {
@@ -37,6 +42,7 @@ class StrapiMCPServer {
     this.adminEmail = process.env.STRAPI_ADMIN_EMAIL
     this.adminPassword = process.env.STRAPI_ADMIN_PASSWORD
     this.jwtToken = null
+    this.tokenExpiry = null
 
     // Validate credentials
     if (!this.apiToken && (!this.adminEmail || !this.adminPassword)) {
@@ -51,7 +57,7 @@ class StrapiMCPServer {
     this.server = new Server(
       {
         name: 'ainative-strapi-mcp',
-        version: '1.0.0'
+        version: '1.1.0'
       },
       {
         capabilities: {
@@ -77,23 +83,26 @@ class StrapiMCPServer {
       return this.apiToken
     }
 
-    // For admin operations, we need to use admin JWT
-    if (!this.jwtToken) {
-      try {
-        const response = await axios.post(`${this.strapiUrl}/admin/login`, {
-          email: this.adminEmail,
-          password: this.adminPassword
-        })
-        this.jwtToken = response.data.data.token
+    // Check if JWT token exists and is still valid (tokens expire after 30 minutes)
+    const now = Date.now()
+    if (this.jwtToken && this.tokenExpiry && now < this.tokenExpiry) {
+      return this.jwtToken
+    }
 
-        // Generate API token for content operations
-        // Note: In production, you should use a pre-generated API token
-        // For now, we'll use admin JWT which should work for /api endpoints
-        console.error('[Info] Authenticated with admin credentials')
-      } catch (error) {
-        console.error('[Error] Authentication failed:', error.message)
-        throw error
-      }
+    // Token expired or doesn't exist - get a fresh one
+    try {
+      console.error('[Info] Getting fresh authentication token...')
+      const response = await axios.post(`${this.strapiUrl}/admin/login`, {
+        email: this.adminEmail,
+        password: this.adminPassword
+      })
+      this.jwtToken = response.data.data.token
+      // Tokens expire after 30 minutes, refresh 5 minutes early to be safe
+      this.tokenExpiry = now + (25 * 60 * 1000)
+      console.error('[Info] Authenticated successfully')
+    } catch (error) {
+      console.error('[Error] Authentication failed:', error.message)
+      throw error
     }
 
     return this.jwtToken
@@ -114,6 +123,7 @@ class StrapiMCPServer {
               author_id: { type: 'number', description: 'Author ID (use strapi_list_authors to find)' },
               category_id: { type: 'number', description: 'Category ID (use strapi_list_categories)' },
               tag_ids: { type: 'array', items: { type: 'number' }, description: 'Array of tag IDs (use strapi_list_tags)' },
+              published_date: { type: 'string', description: 'Custom publish date (ISO 8601). Defaults to current date/time if not provided' },
               publishedAt: { type: 'string', description: 'Publication date (ISO 8601) or null for draft' }
             },
             required: ['title', 'content', 'author_id']
@@ -132,7 +142,8 @@ class StrapiMCPServer {
               author_id: { type: 'number', description: 'Filter by author ID' },
               tag_id: { type: 'number', description: 'Filter by tag ID' },
               sort: { type: 'string', description: 'Sort field and direction (e.g., "publishedAt:desc", "title:asc")', default: 'createdAt:desc' },
-              search: { type: 'string', description: 'Search in title and content' }
+              search: { type: 'string', description: 'Search in title and content' },
+              summary: { type: 'boolean', description: 'Return summary only (excludes content field for token optimization)', default: true }
             }
           }
         },
@@ -155,8 +166,10 @@ class StrapiMCPServer {
             properties: {
               document_id: { type: 'string', description: 'Blog post document ID' },
               title: { type: 'string', description: 'New title' },
+              slug: { type: 'string', description: 'URL slug (auto-generated from title if not provided)' },
               content: { type: 'string', description: 'New content in MARKDOWN' },
               description: { type: 'string', description: 'New description' },
+              published_date: { type: 'string', description: 'Update publish date (ISO 8601)' },
               category_id: { type: 'number', description: 'New category ID' },
               tag_ids: { type: 'array', items: { type: 'number' }, description: 'New tag IDs' }
             },
@@ -207,6 +220,7 @@ class StrapiMCPServer {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'Tutorial title' },
+              slug: { type: 'string', description: 'URL slug (auto-generated from title if not provided)' },
               content: { type: 'string', description: 'Tutorial content in MARKDOWN format' },
               description: { type: 'string', description: 'Short description' },
               difficulty: { type: 'string', enum: ['beginner', 'intermediate', 'advanced'], description: 'Difficulty level' },
@@ -230,7 +244,8 @@ class StrapiMCPServer {
               status: { type: 'string', enum: ['published', 'draft', 'all'], description: 'Filter by status', default: 'all' },
               difficulty: { type: 'string', enum: ['beginner', 'intermediate', 'advanced'], description: 'Filter by difficulty' },
               category_id: { type: 'number', description: 'Filter by category ID' },
-              sort: { type: 'string', description: 'Sort field and direction', default: 'createdAt:desc' }
+              sort: { type: 'string', description: 'Sort field and direction', default: 'createdAt:desc' },
+              summary: { type: 'boolean', description: 'Return summary only (excludes content field for token optimization)', default: true }
             }
           }
         },
@@ -253,6 +268,7 @@ class StrapiMCPServer {
             properties: {
               document_id: { type: 'string', description: 'Tutorial document ID' },
               title: { type: 'string', description: 'New title' },
+              slug: { type: 'string', description: 'URL slug (auto-generated from title if not provided)' },
               content: { type: 'string', description: 'New content in MARKDOWN' },
               description: { type: 'string', description: 'New description' },
               difficulty: { type: 'string', enum: ['beginner', 'intermediate', 'advanced'], description: 'New difficulty' },
@@ -281,6 +297,7 @@ class StrapiMCPServer {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'Event title' },
+              slug: { type: 'string', description: 'URL slug (auto-generated from title if not provided)' },
               description: { type: 'string', description: 'Event description in MARKDOWN' },
               event_type: { type: 'string', enum: ['webinar', 'workshop', 'meetup', 'conference'], description: 'Type of event' },
               start_date: { type: 'string', description: 'Event start date/time (ISO 8601)' },
@@ -304,7 +321,8 @@ class StrapiMCPServer {
               status: { type: 'string', enum: ['published', 'draft', 'all'], description: 'Filter by status', default: 'all' },
               event_type: { type: 'string', enum: ['webinar', 'workshop', 'meetup', 'conference'], description: 'Filter by event type' },
               upcoming: { type: 'boolean', description: 'Show only upcoming events', default: false },
-              sort: { type: 'string', description: 'Sort field and direction', default: 'start_date:asc' }
+              sort: { type: 'string', description: 'Sort field and direction', default: 'start_date:asc' },
+              summary: { type: 'boolean', description: 'Return summary only (excludes description field for token optimization)', default: true }
             }
           }
         },
@@ -327,6 +345,7 @@ class StrapiMCPServer {
             properties: {
               document_id: { type: 'string', description: 'Event document ID' },
               title: { type: 'string', description: 'New title' },
+              slug: { type: 'string', description: 'URL slug (auto-generated from title if not provided)' },
               description: { type: 'string', description: 'New description' },
               start_date: { type: 'string', description: 'New start date/time' },
               end_date: { type: 'string', description: 'New end date/time' },
@@ -350,6 +369,25 @@ class StrapiMCPServer {
         }
       ]
     }))
+  }
+
+  /**
+   * Generate URL-friendly slug from title
+   * @param {string} title - The title to convert to a slug
+   * @returns {string} - URL-friendly slug
+   */
+  generateSlug (title) {
+    if (!title || typeof title !== 'string') {
+      return ''
+    }
+
+    return title
+      .toLowerCase() // Convert to lowercase
+      .replace(/[^a-z0-9\s-]/g, '') // Remove special characters (keep a-z, 0-9, spaces, hyphens)
+      .trim() // Remove leading/trailing whitespace
+      .replace(/\s+/g, '-') // Replace spaces with hyphens
+      .replace(/-+/g, '-') // Replace multiple hyphens with single hyphen
+      .replace(/^-+|-+$/g, '') // Remove leading/trailing hyphens
   }
 
   setupHandlers () {
@@ -434,13 +472,21 @@ class StrapiMCPServer {
   }
 
   async createBlogPost (headers, args) {
+    // Calculate reading time (average 200 words per minute)
+    const wordCount = args.content.split(/\s+/).length
+    const readingTime = Math.ceil(wordCount / 200)
+
     const data = {
       title: args.title,
+      slug: args.slug || this.generateSlug(args.title), // Auto-generate from title if not provided
       content: args.content,
-      description: args.description,
+      excerpt: args.description, // Map description to excerpt field
       author: args.author_id,
       category: args.category_id,
       tags: args.tag_ids,
+      reading_time: readingTime,
+      // Set published_date to current date/time if not provided
+      published_date: args.published_date || new Date().toISOString(),
       publishedAt: args.publishedAt || null
     }
 
@@ -459,7 +505,7 @@ class StrapiMCPServer {
   }
 
   async listBlogPosts (headers, args = {}) {
-    const { page = 1, pageSize = 25, status = 'all' } = args
+    const { page = 1, pageSize = 25, status = 'all', summary = true } = args
 
     const response = await axios.get(
       `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post`,
@@ -472,6 +518,38 @@ class StrapiMCPServer {
       }
     )
 
+    // Summary mode - exclude large fields for token optimization
+    if (summary && response.data.results) {
+      const summarized = {
+        results: response.data.results.map(item => ({
+          id: item.id,
+          documentId: item.documentId,
+          title: item.title,
+          slug: item.slug,
+          excerpt: item.excerpt && item.excerpt.length > 500 ? item.excerpt.substring(0, 500) + '...' : item.excerpt,
+          reading_time: item.reading_time,
+          published_date: item.published_date,
+          publishedAt: item.publishedAt,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+          // Summarized relations - id and name only
+          author: item.author ? { id: item.author.id, name: item.author.name } : null,
+          category: item.category ? { id: item.category.id, name: item.category.name } : null,
+          tags: item.tags ? item.tags.map(tag => ({ id: tag.id, name: tag.name })) : []
+          // EXCLUDED: content (large text field ~5,000-20,000 chars)
+        })),
+        pagination: response.data.pagination
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(summarized, null, 2)
+        }]
+      }
+    }
+
+    // Full mode - backward compatibility
     return {
       content: [{
         type: 'text',
@@ -497,9 +575,22 @@ class StrapiMCPServer {
 
   async updateBlogPost (headers, args) {
     const data = {}
-    if (args.title) data.title = args.title
-    if (args.content) data.content = args.content
-    if (args.description) data.description = args.description
+    if (args.title) {
+      data.title = args.title
+      // Auto-generate slug from new title if slug not explicitly provided
+      if (!args.slug) {
+        data.slug = this.generateSlug(args.title)
+      }
+    }
+    if (args.slug) data.slug = args.slug
+    if (args.content) {
+      data.content = args.content
+      // Recalculate reading time if content is updated
+      const wordCount = args.content.split(/\s+/).length
+      data.reading_time = Math.ceil(wordCount / 200)
+    }
+    if (args.description) data.excerpt = args.description // Map description to excerpt
+    if (args.published_date) data.published_date = args.published_date
     if (args.category_id) data.category = args.category_id
     if (args.tag_ids) data.tags = args.tag_ids
 
@@ -519,14 +610,12 @@ class StrapiMCPServer {
   }
 
   async publishBlogPost (headers, args) {
-    const data = {
-      publishedAt: args.publish ? new Date().toISOString() : null
-    }
+    // Use /actions/publish or /actions/unpublish endpoint
+    const action = args.publish !== false ? 'publish' : 'unpublish'
 
-    // Strapi 5 uses documentId for single document operations
-    const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post/${args.document_id}`,
-      data,
+    const response = await axios.post(
+      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post/${args.document_id}/actions/${action}`,
+      {},
       { headers }
     )
 
@@ -582,8 +671,10 @@ class StrapiMCPServer {
 
   // ==================== TUTORIAL METHODS ====================
   async createTutorial (headers, args) {
+    // Build tutorial data with auto-generated slug
     const data = {
       title: args.title,
+      slug: args.slug || this.generateSlug(args.title), // Auto-generate slug from title if not provided
       content: args.content,
       description: args.description,
       difficulty: args.difficulty,
@@ -609,7 +700,7 @@ class StrapiMCPServer {
   }
 
   async listTutorials (headers, args = {}) {
-    const { page = 1, pageSize = 25 } = args
+    const { page = 1, pageSize = 25, summary = true } = args
 
     const response = await axios.get(
       `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial`,
@@ -622,6 +713,38 @@ class StrapiMCPServer {
       }
     )
 
+    // Summary mode - exclude large fields for token optimization
+    if (summary && response.data.results) {
+      const summarized = {
+        results: response.data.results.map(item => ({
+          id: item.id,
+          documentId: item.documentId,
+          title: item.title,
+          slug: item.slug,
+          description: item.description && item.description.length > 500 ? item.description.substring(0, 500) + '...' : item.description,
+          difficulty: item.difficulty,
+          duration: item.duration,
+          publishedAt: item.publishedAt,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+          // Summarized relations - id and name only
+          author: item.author ? { id: item.author.id, name: item.author.name } : null,
+          category: item.category ? { id: item.category.id, name: item.category.name } : null,
+          tags: item.tags ? item.tags.map(tag => ({ id: tag.id, name: tag.name })) : []
+          // EXCLUDED: content (large text field ~5,000-20,000 chars)
+        })),
+        pagination: response.data.pagination
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(summarized, null, 2)
+        }]
+      }
+    }
+
+    // Full mode - backward compatibility
     return {
       content: [{
         type: 'text',
@@ -646,7 +769,14 @@ class StrapiMCPServer {
 
   async updateTutorial (headers, args) {
     const data = {}
-    if (args.title) data.title = args.title
+    // Auto-generate slug from new title if title provided but slug is not
+    if (args.title) {
+      data.title = args.title
+      if (!args.slug) {
+        data.slug = this.generateSlug(args.title)
+      }
+    }
+    if (args.slug) data.slug = args.slug
     if (args.content) data.content = args.content
     if (args.description) data.description = args.description
     if (args.difficulty) data.difficulty = args.difficulty
@@ -667,13 +797,12 @@ class StrapiMCPServer {
   }
 
   async publishTutorial (headers, args) {
-    const data = {
-      publishedAt: args.publish ? new Date().toISOString() : null
-    }
+    // Use /actions/publish or /actions/unpublish endpoint
+    const action = args.publish !== false ? 'publish' : 'unpublish'
 
-    const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial/${args.document_id}`,
-      data,
+    const response = await axios.post(
+      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial/${args.document_id}/actions/${action}`,
+      {},
       { headers }
     )
 
@@ -687,8 +816,10 @@ class StrapiMCPServer {
 
   // ==================== EVENT METHODS ====================
   async createEvent (headers, args) {
+    // Build event data with auto-generated slug
     const data = {
       title: args.title,
+      slug: args.slug || this.generateSlug(args.title), // Auto-generate slug from title if not provided
       description: args.description,
       event_type: args.event_type,
       start_date: args.start_date,
@@ -714,7 +845,7 @@ class StrapiMCPServer {
   }
 
   async listEvents (headers, args = {}) {
-    const { page = 1, pageSize = 25 } = args
+    const { page = 1, pageSize = 25, summary = true } = args
 
     const response = await axios.get(
       `${this.strapiUrl}/content-manager/collection-types/api::event.event`,
@@ -727,6 +858,37 @@ class StrapiMCPServer {
       }
     )
 
+    // Summary mode - exclude large fields for token optimization
+    if (summary && response.data.results) {
+      const summarized = {
+        results: response.data.results.map(item => ({
+          id: item.id,
+          documentId: item.documentId,
+          title: item.title,
+          slug: item.slug,
+          event_type: item.event_type,
+          start_date: item.start_date,
+          end_date: item.end_date,
+          location: item.location,
+          registration_url: item.registration_url,
+          max_attendees: item.max_attendees,
+          publishedAt: item.publishedAt,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt
+          // EXCLUDED: description (large text field ~2,000-10,000 chars)
+        })),
+        pagination: response.data.pagination
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(summarized, null, 2)
+        }]
+      }
+    }
+
+    // Full mode - backward compatibility
     return {
       content: [{
         type: 'text',
@@ -751,7 +913,14 @@ class StrapiMCPServer {
 
   async updateEvent (headers, args) {
     const data = {}
-    if (args.title) data.title = args.title
+    // Auto-generate slug from new title if title provided but slug is not
+    if (args.title) {
+      data.title = args.title
+      if (!args.slug) {
+        data.slug = this.generateSlug(args.title)
+      }
+    }
+    if (args.slug) data.slug = args.slug
     if (args.description) data.description = args.description
     if (args.start_date) data.start_date = args.start_date
     if (args.end_date) data.end_date = args.end_date
@@ -773,13 +942,12 @@ class StrapiMCPServer {
   }
 
   async publishEvent (headers, args) {
-    const data = {
-      publishedAt: args.publish ? new Date().toISOString() : null
-    }
+    // Use /actions/publish or /actions/unpublish endpoint
+    const action = args.publish !== false ? 'publish' : 'unpublish'
 
-    const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::event.event/${args.document_id}`,
-      data,
+    const response = await axios.post(
+      `${this.strapiUrl}/content-manager/collection-types/api::event.event/${args.document_id}/actions/${action}`,
+      {},
       { headers }
     )
 
