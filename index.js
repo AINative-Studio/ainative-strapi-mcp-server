@@ -10,6 +10,8 @@ const { Server } = require('@modelcontextprotocol/sdk/server/index.js')
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js')
 const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontextprotocol/sdk/types.js')
 const axios = require('axios')
+const fs = require('fs')
+const FormData = require('form-data')
 
 /**
  * AINative Strapi MCP Server v1.1.0
@@ -366,6 +368,27 @@ class StrapiMCPServer {
             },
             required: ['document_id']
           }
+        },
+        // ==================== MEDIA OPERATIONS ====================
+        {
+          name: 'strapi_upload_file',
+          description: 'Upload a file to Strapi Media Library',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              filePath: { type: 'string', description: 'Local path to the file to upload' },
+              fileInfo: {
+                type: 'object',
+                description: 'Optional file metadata',
+                properties: {
+                  altText: { type: 'string', description: 'Alternative text' },
+                  caption: { type: 'string', description: 'Caption' },
+                  name: { type: 'string', description: 'File name' }
+                }
+              }
+            },
+            required: ['filePath']
+          }
         }
       ]
     }))
@@ -455,6 +478,9 @@ class StrapiMCPServer {
 
           case 'strapi_publish_event':
             return await this.publishEvent(headers, request.params.arguments)
+
+          case 'strapi_upload_file':
+            return await this.uploadFile(headers, request.params.arguments)
 
           default:
             throw new Error(`Unknown tool: ${request.params.name}`)
@@ -959,6 +985,40 @@ class StrapiMCPServer {
     }
   }
 
+  // ==================== MEDIA METHODS ====================
+  async uploadFile (headers, args) {
+    const { filePath, fileInfo = {} } = args
+
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`File not found: ${filePath}`)
+    }
+
+    const form = new FormData()
+    form.append('files', fs.createReadStream(filePath))
+
+    if (fileInfo) {
+      form.append('fileInfo', JSON.stringify(fileInfo))
+    }
+
+    const response = await axios.post(
+      `${this.strapiUrl}/api/upload`,
+      form,
+      {
+        headers: {
+          ...headers,
+          ...form.getHeaders()
+        }
+      }
+    )
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response.data, null, 2)
+      }]
+    }
+  }
+
   async run () {
     const transport = new StdioServerTransport()
     await this.server.connect(transport)
@@ -966,14 +1026,18 @@ class StrapiMCPServer {
   }
 }
 
-console.error('[DEBUG] Creating server instance...')
-const server = new StrapiMCPServer()
+module.exports = StrapiMCPServer
 
-console.error('[DEBUG] Starting server.run()...')
-server.run().catch((error) => {
-  console.error('[ERROR] Server.run() failed:', error)
-  console.error('[ERROR] Stack trace:', error.stack)
-  process.exit(1)
-})
+if (require.main === module) {
+  console.error('[DEBUG] Creating server instance...')
+  const server = new StrapiMCPServer()
 
-console.error('[DEBUG] Server startup sequence initiated')
+  console.error('[DEBUG] Starting server.run()...')
+  server.run().catch((error) => {
+    console.error('[ERROR] Server.run() failed:', error)
+    console.error('[ERROR] Stack trace:', error.stack)
+    process.exit(1)
+  })
+
+  console.error('[DEBUG] Server startup sequence initiated')
+}

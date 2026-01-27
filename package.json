@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Tests available in repository\"",
+    "test": "nyc mocha tests/**/*.test.js",
     "lint": "eslint *.js",
     "lint:fix": "eslint *.js --fix"
   },
@@ -92,7 +92,8 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "axios": "^1.7.7"
+    "axios": "^1.7.7",
+    "form-data": "^4.0.5"
   },
   "files": [
     "index.js",
@@ -106,5 +107,12 @@
   "funding": {
     "type": "individual",
     "url": "https://ainative.studio"
+  },
+  "devDependencies": {
+    "chai": "^6.2.2",
+    "mocha": "^11.7.5",
+    "nock": "^14.0.10",
+    "nyc": "^17.1.0",
+    "sinon": "^21.0.1"
   }
 }

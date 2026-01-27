@@ -79,7 +79,24 @@ Add to your MCP configuration file:
 4. **strapi_update_event** - Update an existing event
 5. **strapi_publish_event** - Publish or unpublish an event
 
+### Media Operations (1)
+
+1. **strapi_upload_file** - Upload a file to Strapi Media Library
+
 ## Usage Examples
+
+### Uploading a File
+
+```javascript
+strapi_upload_file({
+  filePath: "./assets/diagram.png",
+  fileInfo: {
+    altText: "Architecture Diagram",
+    caption: "Our system architecture",
+    name: "architecture-v1.png"
+  }
+})
+```
 
 ### Creating a Blog Post
 
