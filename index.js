@@ -12,13 +12,14 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 const axios = require('axios')
 
 /**
- * AINative Strapi MCP Server v1.1.0
+ * AINative Strapi MCP Server v1.2.0
  *
  * Natural language content publishing and management for Strapi CMS
  * Operations:
  * - Blog Post Management: create, list, get, update, publish (with advanced filtering)
  * - Tutorial Management: create, list, get, update, publish (with auto-slug generation)
  * - Event Management: create, list, get, update, publish (with auto-slug generation)
+ * - Gallery Management: create, list, get, update, publish gallery items (Refs #1259)
  * - Author Management: list authors
  * - Category/Tag Management: list categories, list tags
  *
@@ -57,7 +58,7 @@ class StrapiMCPServer {
     this.server = new Server(
       {
         name: 'ainative-strapi-mcp',
-        version: '1.1.0'
+        version: '1.2.0'
       },
       {
         capabilities: {
@@ -366,6 +367,81 @@ class StrapiMCPServer {
             },
             required: ['document_id']
           }
+        },
+        // ==================== GALLERY OPERATIONS — Refs #1259 ====================
+        {
+          name: 'strapi_create_gallery_item',
+          description: 'Create a new gallery item (photo or video) in the AINative community gallery',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'Gallery item title' },
+              caption: { type: 'string', description: 'Caption shown on hover and in lightbox' },
+              media_url: { type: 'string', description: 'Direct URL to image or video. Use Google Photos public URLs or direct media links.' },
+              media_type: { type: 'string', enum: ['photo', 'video'], description: 'Media type', default: 'photo' },
+              tags: { type: 'array', items: { type: 'string' }, description: 'Tags e.g. ["event","community","builtwithainative"]' },
+              order: { type: 'number', description: 'Display order (lower = earlier). Defaults to 0.' },
+              width: { type: 'number', description: 'Image width in pixels' },
+              height: { type: 'number', description: 'Image height in pixels' },
+              publishedAt: { type: 'string', description: 'ISO 8601 publish date or null for draft' }
+            },
+            required: ['title', 'media_url', 'media_type']
+          }
+        },
+        {
+          name: 'strapi_list_gallery_items',
+          description: 'List gallery items with optional filtering and pagination',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              page: { type: 'number', description: 'Page number', default: 1 },
+              pageSize: { type: 'number', description: 'Results per page', default: 50 },
+              status: { type: 'string', enum: ['published', 'draft', 'all'], description: 'Filter by status', default: 'all' },
+              media_type: { type: 'string', enum: ['photo', 'video'], description: 'Filter by media type' },
+              tag: { type: 'string', description: 'Filter by tag (exact match)' },
+              sort: { type: 'string', description: 'Sort field and direction', default: 'order:asc' }
+            }
+          }
+        },
+        {
+          name: 'strapi_get_gallery_item',
+          description: 'Get a specific gallery item by document ID',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Gallery item document ID' }
+            },
+            required: ['document_id']
+          }
+        },
+        {
+          name: 'strapi_update_gallery_item',
+          description: 'Update an existing gallery item',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Gallery item document ID' },
+              title: { type: 'string', description: 'New title' },
+              caption: { type: 'string', description: 'New caption' },
+              media_url: { type: 'string', description: 'New media URL' },
+              media_type: { type: 'string', enum: ['photo', 'video'], description: 'New media type' },
+              tags: { type: 'array', items: { type: 'string' }, description: 'New tags array' },
+              order: { type: 'number', description: 'New display order' }
+            },
+            required: ['document_id']
+          }
+        },
+        {
+          name: 'strapi_publish_gallery_item',
+          description: 'Publish or unpublish a gallery item',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Gallery item document ID' },
+              publish: { type: 'boolean', description: 'true to publish, false to unpublish', default: true }
+            },
+            required: ['document_id']
+          }
         }
       ]
     }))
@@ -455,6 +531,22 @@ class StrapiMCPServer {
 
           case 'strapi_publish_event':
             return await this.publishEvent(headers, request.params.arguments)
+
+          // Gallery operations
+          case 'strapi_create_gallery_item':
+            return await this.createGalleryItem(headers, request.params.arguments)
+
+          case 'strapi_list_gallery_items':
+            return await this.listGalleryItems(headers, request.params.arguments)
+
+          case 'strapi_get_gallery_item':
+            return await this.getGalleryItem(headers, request.params.arguments)
+
+          case 'strapi_update_gallery_item':
+            return await this.updateGalleryItem(headers, request.params.arguments)
+
+          case 'strapi_publish_gallery_item':
+            return await this.publishGalleryItem(headers, request.params.arguments)
 
           default:
             throw new Error(`Unknown tool: ${request.params.name}`)
@@ -947,6 +1039,108 @@ class StrapiMCPServer {
 
     const response = await axios.post(
       `${this.strapiUrl}/content-manager/collection-types/api::event.event/${args.document_id}/actions/${action}`,
+      {},
+      { headers }
+    )
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response.data, null, 2)
+      }]
+    }
+  }
+
+  // ─── Gallery Methods — Refs #1259 ───────────────────────────────────────────
+
+  async createGalleryItem (headers, args) {
+    const data = {
+      title: args.title,
+      caption: args.caption,
+      media_url: args.media_url,
+      media_type: args.media_type || 'photo',
+      tags: args.tags || [],
+      order: args.order !== undefined ? args.order : 0,
+      width: args.width,
+      height: args.height,
+      publishedAt: args.publishedAt || null
+    }
+
+    const response = await axios.post(
+      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item`,
+      data,
+      { headers }
+    )
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response.data, null, 2)
+      }]
+    }
+  }
+
+  async listGalleryItems (headers, args = {}) {
+    const { page = 1, pageSize = 50, sort = 'order:asc' } = args
+
+    const response = await axios.get(
+      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item`,
+      {
+        headers,
+        params: { page, pageSize, sort }
+      }
+    )
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response.data, null, 2)
+      }]
+    }
+  }
+
+  async getGalleryItem (headers, args) {
+    const response = await axios.get(
+      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item/${args.document_id}`,
+      { headers }
+    )
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response.data, null, 2)
+      }]
+    }
+  }
+
+  async updateGalleryItem (headers, args) {
+    const data = {}
+    if (args.title !== undefined) data.title = args.title
+    if (args.caption !== undefined) data.caption = args.caption
+    if (args.media_url !== undefined) data.media_url = args.media_url
+    if (args.media_type !== undefined) data.media_type = args.media_type
+    if (args.tags !== undefined) data.tags = args.tags
+    if (args.order !== undefined) data.order = args.order
+
+    const response = await axios.put(
+      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item/${args.document_id}`,
+      data,
+      { headers }
+    )
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify(response.data, null, 2)
+      }]
+    }
+  }
+
+  async publishGalleryItem (headers, args) {
+    const action = args.publish !== false ? 'publish' : 'unpublish'
+
+    const response = await axios.post(
+      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item/${args.document_id}/actions/${action}`,
       {},
       { headers }
     )
