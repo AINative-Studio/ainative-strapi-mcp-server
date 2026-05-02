@@ -12,7 +12,7 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 const axios = require('axios')
 
 /**
- * AINative Strapi MCP Server v1.2.0
+ * AINative Strapi MCP Server v1.3.0
  *
  * Natural language content publishing and management for Strapi CMS
  * Operations:
@@ -44,6 +44,9 @@ class StrapiMCPServer {
     this.adminPassword = process.env.STRAPI_ADMIN_PASSWORD
     this.jwtToken = null
     this.tokenExpiry = null
+    // When using API token, route through public /api/ endpoints.
+    // When using admin JWT, use /content-manager/ (admin-only).
+    this.usePublicApi = !!this.apiToken
 
     // Validate credentials
     if (!this.apiToken && (!this.adminEmail || !this.adminPassword)) {
@@ -58,7 +61,7 @@ class StrapiMCPServer {
     this.server = new Server(
       {
         name: 'ainative-strapi-mcp',
-        version: '1.2.0'
+        version: '1.3.0'
       },
       {
         capabilities: {
@@ -107,6 +110,62 @@ class StrapiMCPServer {
     }
 
     return this.jwtToken
+  }
+
+  // Build the correct endpoint URL based on auth mode.
+  // Public API (/api/) is used when STRAPI_API_TOKEN is set.
+  // Admin API (/content-manager/) is used when authenticating via admin JWT.
+  _url (contentType, documentId) {
+    if (this.usePublicApi) {
+      // contentType like 'blog-post' → '/api/blog-posts'
+      const pluralMap = {
+        'blog-post': 'blog-posts',
+        'tutorial': 'tutorials',
+        'event': 'events',
+        'author': 'authors',
+        'category': 'categories',
+        'tag': 'tags',
+        'gallery-item': 'gallery-items'
+      }
+      const plural = pluralMap[contentType] || `${contentType}s`
+      const base = `${this.strapiUrl}/api/${plural}`
+      return documentId ? `${base}/${documentId}` : base
+    }
+    const base = `${this.strapiUrl}/content-manager/collection-types/api::${contentType}.${contentType}`
+    return documentId ? `${base}/${documentId}` : base
+  }
+
+  // Public API requires payload wrapped in { data: {...} }, admin API does not.
+  _payload (data) {
+    return this.usePublicApi ? { data } : data
+  }
+
+  // Publish/unpublish: public API uses PUT with publishedAt, admin uses /actions/publish.
+  async _publishAction (headers, contentType, documentId, publish) {
+    if (this.usePublicApi) {
+      const data = { publishedAt: publish ? new Date().toISOString() : null }
+      const response = await axios.put(this._url(contentType, documentId), this._payload(data), { headers })
+      return response.data
+    }
+    const action = publish ? 'publish' : 'unpublish'
+    const response = await axios.post(
+      `${this.strapiUrl}/content-manager/collection-types/api::${contentType}.${contentType}/${documentId}/actions/${action}`,
+      {},
+      { headers }
+    )
+    return response.data
+  }
+
+  // Normalise list response: public API wraps in { data: [], meta: { pagination } }
+  // admin API returns { results: [], pagination: {} }
+  _normaliseList (responseData) {
+    if (this.usePublicApi) {
+      return {
+        results: responseData.data || [],
+        pagination: responseData.meta && responseData.meta.pagination ? responseData.meta.pagination : {}
+      }
+    }
+    return responseData
   }
 
   setupTools () {
@@ -583,8 +642,8 @@ class StrapiMCPServer {
     }
 
     const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post`,
-      data,
+      this._url('blog-post'),
+      this._payload(data),
       { headers }
     )
 
@@ -599,19 +658,19 @@ class StrapiMCPServer {
   async listBlogPosts (headers, args = {}) {
     const { page = 1, pageSize = 25, status = 'all', summary = true } = args
 
+    const params = this.usePublicApi
+      ? { 'pagination[page]': page, 'pagination[pageSize]': pageSize, populate: 'author,category,tags' }
+      : { page, pageSize }
+
     const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post`,
-      {
-        headers,
-        params: {
-          page,
-          pageSize
-        }
-      }
+      this._url('blog-post'),
+      { headers, params }
     )
 
+    const normalised = this._normaliseList(response.data)
+
     // Summary mode - exclude large fields for token optimization
-    if (summary && response.data.results) {
+    if (summary && normalised.results) {
       const summarized = {
         results: response.data.results.map(item => ({
           id: item.id,
@@ -630,7 +689,7 @@ class StrapiMCPServer {
           tags: item.tags ? item.tags.map(tag => ({ id: tag.id, name: tag.name })) : []
           // EXCLUDED: content (large text field ~5,000-20,000 chars)
         })),
-        pagination: response.data.pagination
+        pagination: normalised.pagination
       }
 
       return {
@@ -645,16 +704,16 @@ class StrapiMCPServer {
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(normalised, null, 2)
       }]
     }
   }
 
   async getBlogPost (headers, args) {
-    // Strapi 5 uses documentId for single document operations
+    const params = this.usePublicApi ? { populate: 'author,category,tags' } : {}
     const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post/${args.document_id}`,
-      { headers }
+      this._url('blog-post', args.document_id),
+      { headers, params }
     )
 
     return {
@@ -686,10 +745,9 @@ class StrapiMCPServer {
     if (args.category_id) data.category = args.category_id
     if (args.tag_ids) data.tags = args.tag_ids
 
-    // Strapi 5 uses documentId for single document operations
     const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post/${args.document_id}`,
-      data,
+      this._url('blog-post', args.document_id),
+      this._payload(data),
       { headers }
     )
 
@@ -702,61 +760,46 @@ class StrapiMCPServer {
   }
 
   async publishBlogPost (headers, args) {
-    // Use /actions/publish or /actions/unpublish endpoint
-    const action = args.publish !== false ? 'publish' : 'unpublish'
-
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::blog-post.blog-post/${args.document_id}/actions/${action}`,
-      {},
-      { headers }
-    )
+    const publish = args.publish !== false
+    const result = await this._publishAction(headers, 'blog-post', args.document_id, publish)
 
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(result, null, 2)
       }]
     }
   }
 
   async listAuthors (headers) {
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::author.author`,
-      { headers }
-    )
-
+    const params = this.usePublicApi ? { 'pagination[pageSize]': 100 } : {}
+    const response = await axios.get(this._url('author'), { headers, params })
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(this._normaliseList(response.data), null, 2)
       }]
     }
   }
 
   async listCategories (headers) {
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::category.category`,
-      { headers }
-    )
-
+    const params = this.usePublicApi ? { 'pagination[pageSize]': 100 } : {}
+    const response = await axios.get(this._url('category'), { headers, params })
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(this._normaliseList(response.data), null, 2)
       }]
     }
   }
 
   async listTags (headers) {
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::tag.tag`,
-      { headers }
-    )
-
+    const params = this.usePublicApi ? { 'pagination[pageSize]': 100 } : {}
+    const response = await axios.get(this._url('tag'), { headers, params })
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(this._normaliseList(response.data), null, 2)
       }]
     }
   }
@@ -777,11 +820,7 @@ class StrapiMCPServer {
       publishedAt: args.publishedAt || null
     }
 
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial`,
-      data,
-      { headers }
-    )
+    const response = await axios.post(this._url('tutorial'), this._payload(data), { headers })
 
     return {
       content: [{
@@ -794,21 +833,17 @@ class StrapiMCPServer {
   async listTutorials (headers, args = {}) {
     const { page = 1, pageSize = 25, summary = true } = args
 
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial`,
-      {
-        headers,
-        params: {
-          page,
-          pageSize
-        }
-      }
-    )
+    const params = this.usePublicApi
+      ? { 'pagination[page]': page, 'pagination[pageSize]': pageSize, populate: 'author,category,tags' }
+      : { page, pageSize }
+
+    const response = await axios.get(this._url('tutorial'), { headers, params })
+    const normalised = this._normaliseList(response.data)
 
     // Summary mode - exclude large fields for token optimization
-    if (summary && response.data.results) {
+    if (summary && normalised.results) {
       const summarized = {
-        results: response.data.results.map(item => ({
+        results: normalised.results.map(item => ({
           id: item.id,
           documentId: item.documentId,
           title: item.title,
@@ -819,13 +854,11 @@ class StrapiMCPServer {
           publishedAt: item.publishedAt,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
-          // Summarized relations - id and name only
           author: item.author ? { id: item.author.id, name: item.author.name } : null,
           category: item.category ? { id: item.category.id, name: item.category.name } : null,
           tags: item.tags ? item.tags.map(tag => ({ id: tag.id, name: tag.name })) : []
-          // EXCLUDED: content (large text field ~5,000-20,000 chars)
         })),
-        pagination: response.data.pagination
+        pagination: normalised.pagination
       }
 
       return {
@@ -836,21 +869,17 @@ class StrapiMCPServer {
       }
     }
 
-    // Full mode - backward compatibility
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(normalised, null, 2)
       }]
     }
   }
 
   async getTutorial (headers, args) {
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial/${args.document_id}`,
-      { headers }
-    )
-
+    const params = this.usePublicApi ? { populate: 'author,category,tags' } : {}
+    const response = await axios.get(this._url('tutorial', args.document_id), { headers, params })
     return {
       content: [{
         type: 'text',
@@ -861,7 +890,6 @@ class StrapiMCPServer {
 
   async updateTutorial (headers, args) {
     const data = {}
-    // Auto-generate slug from new title if title provided but slug is not
     if (args.title) {
       data.title = args.title
       if (!args.slug) {
@@ -874,12 +902,7 @@ class StrapiMCPServer {
     if (args.difficulty) data.difficulty = args.difficulty
     if (args.duration) data.duration = args.duration
 
-    const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial/${args.document_id}`,
-      data,
-      { headers }
-    )
-
+    const response = await axios.put(this._url('tutorial', args.document_id), this._payload(data), { headers })
     return {
       content: [{
         type: 'text',
@@ -889,29 +912,20 @@ class StrapiMCPServer {
   }
 
   async publishTutorial (headers, args) {
-    // Use /actions/publish or /actions/unpublish endpoint
-    const action = args.publish !== false ? 'publish' : 'unpublish'
-
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::tutorial.tutorial/${args.document_id}/actions/${action}`,
-      {},
-      { headers }
-    )
-
+    const result = await this._publishAction(headers, 'tutorial', args.document_id, args.publish !== false)
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(result, null, 2)
       }]
     }
   }
 
   // ==================== EVENT METHODS ====================
   async createEvent (headers, args) {
-    // Build event data with auto-generated slug
     const data = {
       title: args.title,
-      slug: args.slug || this.generateSlug(args.title), // Auto-generate slug from title if not provided
+      slug: args.slug || this.generateSlug(args.title),
       description: args.description,
       event_type: args.event_type,
       start_date: args.start_date,
@@ -922,12 +936,7 @@ class StrapiMCPServer {
       publishedAt: args.publishedAt || null
     }
 
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::event.event`,
-      data,
-      { headers }
-    )
-
+    const response = await axios.post(this._url('event'), this._payload(data), { headers })
     return {
       content: [{
         type: 'text',
@@ -939,21 +948,16 @@ class StrapiMCPServer {
   async listEvents (headers, args = {}) {
     const { page = 1, pageSize = 25, summary = true } = args
 
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::event.event`,
-      {
-        headers,
-        params: {
-          page,
-          pageSize
-        }
-      }
-    )
+    const params = this.usePublicApi
+      ? { 'pagination[page]': page, 'pagination[pageSize]': pageSize }
+      : { page, pageSize }
 
-    // Summary mode - exclude large fields for token optimization
-    if (summary && response.data.results) {
+    const response = await axios.get(this._url('event'), { headers, params })
+    const normalised = this._normaliseList(response.data)
+
+    if (summary && normalised.results) {
       const summarized = {
-        results: response.data.results.map(item => ({
+        results: normalised.results.map(item => ({
           id: item.id,
           documentId: item.documentId,
           title: item.title,
@@ -967,9 +971,8 @@ class StrapiMCPServer {
           publishedAt: item.publishedAt,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt
-          // EXCLUDED: description (large text field ~2,000-10,000 chars)
         })),
-        pagination: response.data.pagination
+        pagination: normalised.pagination
       }
 
       return {
@@ -980,21 +983,16 @@ class StrapiMCPServer {
       }
     }
 
-    // Full mode - backward compatibility
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(normalised, null, 2)
       }]
     }
   }
 
   async getEvent (headers, args) {
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::event.event/${args.document_id}`,
-      { headers }
-    )
-
+    const response = await axios.get(this._url('event', args.document_id), { headers })
     return {
       content: [{
         type: 'text',
@@ -1005,12 +1003,9 @@ class StrapiMCPServer {
 
   async updateEvent (headers, args) {
     const data = {}
-    // Auto-generate slug from new title if title provided but slug is not
     if (args.title) {
       data.title = args.title
-      if (!args.slug) {
-        data.slug = this.generateSlug(args.title)
-      }
+      if (!args.slug) data.slug = this.generateSlug(args.title)
     }
     if (args.slug) data.slug = args.slug
     if (args.description) data.description = args.description
@@ -1019,12 +1014,7 @@ class StrapiMCPServer {
     if (args.location) data.location = args.location
     if (args.registration_url) data.registration_url = args.registration_url
 
-    const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::event.event/${args.document_id}`,
-      data,
-      { headers }
-    )
-
+    const response = await axios.put(this._url('event', args.document_id), this._payload(data), { headers })
     return {
       content: [{
         type: 'text',
@@ -1034,19 +1024,11 @@ class StrapiMCPServer {
   }
 
   async publishEvent (headers, args) {
-    // Use /actions/publish or /actions/unpublish endpoint
-    const action = args.publish !== false ? 'publish' : 'unpublish'
-
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::event.event/${args.document_id}/actions/${action}`,
-      {},
-      { headers }
-    )
-
+    const result = await this._publishAction(headers, 'event', args.document_id, args.publish !== false)
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(result, null, 2)
       }]
     }
   }
@@ -1066,12 +1048,7 @@ class StrapiMCPServer {
       publishedAt: args.publishedAt || null
     }
 
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item`,
-      data,
-      { headers }
-    )
-
+    const response = await axios.post(this._url('gallery-item'), this._payload(data), { headers })
     return {
       content: [{
         type: 'text',
@@ -1083,28 +1060,21 @@ class StrapiMCPServer {
   async listGalleryItems (headers, args = {}) {
     const { page = 1, pageSize = 50, sort = 'order:asc' } = args
 
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item`,
-      {
-        headers,
-        params: { page, pageSize, sort }
-      }
-    )
+    const params = this.usePublicApi
+      ? { 'pagination[page]': page, 'pagination[pageSize]': pageSize, sort }
+      : { page, pageSize, sort }
 
+    const response = await axios.get(this._url('gallery-item'), { headers, params })
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(this._normaliseList(response.data), null, 2)
       }]
     }
   }
 
   async getGalleryItem (headers, args) {
-    const response = await axios.get(
-      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item/${args.document_id}`,
-      { headers }
-    )
-
+    const response = await axios.get(this._url('gallery-item', args.document_id), { headers })
     return {
       content: [{
         type: 'text',
@@ -1122,12 +1092,7 @@ class StrapiMCPServer {
     if (args.tags !== undefined) data.tags = args.tags
     if (args.order !== undefined) data.order = args.order
 
-    const response = await axios.put(
-      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item/${args.document_id}`,
-      data,
-      { headers }
-    )
-
+    const response = await axios.put(this._url('gallery-item', args.document_id), this._payload(data), { headers })
     return {
       content: [{
         type: 'text',
@@ -1137,18 +1102,11 @@ class StrapiMCPServer {
   }
 
   async publishGalleryItem (headers, args) {
-    const action = args.publish !== false ? 'publish' : 'unpublish'
-
-    const response = await axios.post(
-      `${this.strapiUrl}/content-manager/collection-types/api::gallery-item.gallery-item/${args.document_id}/actions/${action}`,
-      {},
-      { headers }
-    )
-
+    const result = await this._publishAction(headers, 'gallery-item', args.document_id, args.publish !== false)
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(response.data, null, 2)
+        text: JSON.stringify(result, null, 2)
       }]
     }
   }
