@@ -12,7 +12,7 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 const axios = require('axios')
 
 /**
- * AINative Strapi MCP Server v1.3.0
+ * AINative Strapi MCP Server v1.3.1
  *
  * Natural language content publishing and management for Strapi CMS
  * Operations:
@@ -61,7 +61,7 @@ class StrapiMCPServer {
     this.server = new Server(
       {
         name: 'ainative-strapi-mcp',
-        version: '1.3.0'
+        version: '1.3.1'
       },
       {
         capabilities: {
@@ -141,9 +141,22 @@ class StrapiMCPServer {
   }
 
   // Publish/unpublish: public API uses PUT with publishedAt, admin uses /actions/publish.
+  // When publishing via public API, also ensures slug is set (fetches title and generates one if missing).
   async _publishAction (headers, contentType, documentId, publish) {
     if (this.usePublicApi) {
       const data = { publishedAt: publish ? new Date().toISOString() : null }
+
+      // Ensure slug is set before publishing — a missing slug causes /blog/null URLs
+      if (publish) {
+        try {
+          const existing = await axios.get(this._url(contentType, documentId), { headers })
+          const post = existing.data.data || existing.data
+          if (!post.slug && post.title) {
+            data.slug = this.generateSlug(post.title)
+          }
+        } catch (_) { /* non-fatal — proceed without slug patch */ }
+      }
+
       const response = await axios.put(this._url(contentType, documentId), this._payload(data), { headers })
       return response.data
     }
