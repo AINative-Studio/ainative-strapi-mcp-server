@@ -12,14 +12,15 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 const axios = require('axios')
 
 /**
- * AINative Strapi MCP Server v1.3.1
+ * AINative Strapi MCP Server v1.4.0
  *
- * Natural language content publishing and management for Strapi CMS
+ * Natural language content publishing and management for any Strapi CMS instance.
+ * Works with any Strapi v5 blog — not AINative-specific.
  * Operations:
- * - Blog Post Management: create, list, get, update, publish (with advanced filtering)
- * - Tutorial Management: create, list, get, update, publish (with auto-slug generation)
- * - Event Management: create, list, get, update, publish (with auto-slug generation)
- * - Gallery Management: create, list, get, update, publish gallery items (Refs #1259)
+ * - Blog Post Management: create, list, get, update, publish, delete
+ * - Tutorial Management: create, list, get, update, publish, delete
+ * - Event Management: create, list, get, update, publish, delete
+ * - Gallery Management: create, list, get, update, publish, delete (Refs #1259)
  * - Author Management: list authors
  * - Category/Tag Management: list categories, list tags
  *
@@ -262,6 +263,17 @@ class StrapiMCPServer {
           }
         },
         {
+          name: 'strapi_delete_blog_post',
+          description: 'Delete a blog post permanently',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Blog post document ID to delete' }
+            },
+            required: ['document_id']
+          }
+        },
+        {
           name: 'strapi_list_authors',
           description: 'List all authors',
           inputSchema: {
@@ -362,6 +374,17 @@ class StrapiMCPServer {
             required: ['document_id']
           }
         },
+        {
+          name: 'strapi_delete_tutorial',
+          description: 'Delete a tutorial permanently',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Tutorial document ID to delete' }
+            },
+            required: ['document_id']
+          }
+        },
         // ==================== EVENT OPERATIONS ====================
         {
           name: 'strapi_create_event',
@@ -440,6 +463,17 @@ class StrapiMCPServer {
             required: ['document_id']
           }
         },
+        {
+          name: 'strapi_delete_event',
+          description: 'Delete an event permanently',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Event document ID to delete' }
+            },
+            required: ['document_id']
+          }
+        },
         // ==================== GALLERY OPERATIONS — Refs #1259 ====================
         {
           name: 'strapi_create_gallery_item',
@@ -511,6 +545,17 @@ class StrapiMCPServer {
             properties: {
               document_id: { type: 'string', description: 'Gallery item document ID' },
               publish: { type: 'boolean', description: 'true to publish, false to unpublish', default: true }
+            },
+            required: ['document_id']
+          }
+        },
+        {
+          name: 'strapi_delete_gallery_item',
+          description: 'Delete a gallery item permanently',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              document_id: { type: 'string', description: 'Gallery item document ID to delete' }
             },
             required: ['document_id']
           }
@@ -619,6 +664,19 @@ class StrapiMCPServer {
 
           case 'strapi_publish_gallery_item':
             return await this.publishGalleryItem(headers, request.params.arguments)
+
+          // Delete operations
+          case 'strapi_delete_blog_post':
+            return await this.deleteContent(headers, 'blog-post', request.params.arguments.document_id)
+
+          case 'strapi_delete_tutorial':
+            return await this.deleteContent(headers, 'tutorial', request.params.arguments.document_id)
+
+          case 'strapi_delete_event':
+            return await this.deleteContent(headers, 'event', request.params.arguments.document_id)
+
+          case 'strapi_delete_gallery_item':
+            return await this.deleteContent(headers, 'gallery-item', request.params.arguments.document_id)
 
           default:
             throw new Error(`Unknown tool: ${request.params.name}`)
@@ -1120,6 +1178,17 @@ class StrapiMCPServer {
       content: [{
         type: 'text',
         text: JSON.stringify(result, null, 2)
+      }]
+    }
+  }
+
+  async deleteContent (headers, contentType, documentId) {
+    const url = this._url(contentType, documentId)
+    const response = await axios.delete(url, { headers })
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({ deleted: true, document_id: documentId, content_type: contentType, response: response.data }, null, 2)
       }]
     }
   }
